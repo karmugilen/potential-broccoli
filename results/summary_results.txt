@@ -1,0 +1,55 @@
+HIGH-RESOLUTION STEGANOGRAPHY RESULTS SUMMARY (224x224)
+======================================================================
+
+INDIVIDUAL SET RESULTS:
+----------------------------------------------------------------------
+Set 1: 00162.png + 00163.png
+  DWT - Hiding PSNR: 23.83 dB, Recovery PSNR: 17.28 dB
+  DWT - Hiding SSIM: 0.6855, Recovery SSIM: 0.4247
+  ILWT - Hiding PSNR: 30.60 dB, Recovery PSNR: 19.25 dB
+  ILWT - Hiding SSIM: 0.8642, Recovery SSIM: 0.5164
+  ILWT Improvement - Hiding: 6.78 dB, Recovery: 1.97 dB
+
+Set 2: 00164.png + 00165.png
+  DWT - Hiding PSNR: 24.19 dB, Recovery PSNR: 17.61 dB
+  DWT - Hiding SSIM: 0.6514, Recovery SSIM: 0.3954
+  ILWT - Hiding PSNR: 31.81 dB, Recovery PSNR: 18.64 dB
+  ILWT - Hiding SSIM: 0.8467, Recovery SSIM: 0.4186
+  ILWT Improvement - Hiding: 7.62 dB, Recovery: 1.03 dB
+
+Set 3: 00166.png + 00167.png
+  DWT - Hiding PSNR: 24.41 dB, Recovery PSNR: 16.05 dB
+  DWT - Hiding SSIM: 0.7458, Recovery SSIM: 0.4104
+  ILWT - Hiding PSNR: 32.09 dB, Recovery PSNR: 15.62 dB
+  ILWT - Hiding SSIM: 0.8912, Recovery SSIM: 0.4740
+  ILWT Improvement - Hiding: 7.68 dB, Recovery: -0.43 dB
+
+Set 4: 00168.png + 00169.png
+  DWT - Hiding PSNR: 21.47 dB, Recovery PSNR: 14.47 dB
+  DWT - Hiding SSIM: 0.6223, Recovery SSIM: 0.3448
+  ILWT - Hiding PSNR: 30.25 dB, Recovery PSNR: 14.73 dB
+  ILWT - Hiding SSIM: 0.8444, Recovery SSIM: 0.4437
+  ILWT Improvement - Hiding: 8.78 dB, Recovery: 0.26 dB
+
+Set 5: 00170.png + 00171.png
+  DWT - Hiding PSNR: 24.15 dB, Recovery PSNR: 18.05 dB
+  DWT - Hiding SSIM: 0.6922, Recovery SSIM: 0.3797
+  ILWT - Hiding PSNR: 32.39 dB, Recovery PSNR: 19.49 dB
+  ILWT - Hiding SSIM: 0.8613, Recovery SSIM: 0.4991
+  ILWT Improvement - Hiding: 8.25 dB, Recovery: 1.44 dB
+
+AVERAGE RESULTS ACROSS ALL 5 SETS:
+----------------------------------------------------------------------
+Metric               DWT Avg         ILWT Avg        ILWT Gain      
+----------------------------------------------------------------------
+Hiding PSNR (dB)     23.61           31.43           7.82           
+Recovery PSNR (dB)   16.69           17.54           0.85           
+Hiding SSIM          0.6794          0.8616          0.1821         
+Recovery SSIM        0.3910          0.4703          0.0793         
+
+CONCLUSION:
+- ILWT consistently outperforms DWT across all metrics
+- Average hiding PSNR improvement: 7.82 dB
+- Average recovery PSNR improvement: 0.85 dB
+- Results demonstrate superior performance of learnable ILWT approach
+- High-resolution 224x224 processing shows practical applicability

@@ -127,7 +127,7 @@ class AffineCouplingLayer(nn.Module):
     """
     Simplified affine coupling layer for invertible neural networks.
     """
-    def __init__(self, channels, hidden_channels=32):
+    def __init__(self, channels, hidden_channels=32, dropout_rate=0.1):
         super(AffineCouplingLayer, self).__init__()
         
         # Ensure channels is even for splitting
@@ -138,8 +138,10 @@ class AffineCouplingLayer(nn.Module):
         self.net = nn.Sequential(
             nn.Conv2d(half_channels, hidden_channels, kernel_size=3, padding=1),
             nn.ReLU(inplace=True),
+            nn.Dropout2d(dropout_rate),  # Add dropout after first activation
             nn.Conv2d(hidden_channels, hidden_channels, kernel_size=1),
             nn.ReLU(inplace=True),
+            nn.Dropout2d(dropout_rate),  # Add dropout after second activation
             nn.Conv2d(hidden_channels, half_channels * 2, kernel_size=3, padding=1)
         )
         
@@ -233,13 +235,13 @@ class StarINNBlock(nn.Module):
     """
     A single block of the StarINN architecture: ActNorm -> 1x1 Conv -> Affine Coupling
     """
-    def __init__(self, channels, hidden_channels=32):
+    def __init__(self, channels, hidden_channels=32, dropout_rate=0.1):
         super(StarINNBlock, self).__init__()
         assert channels % 2 == 0, "Channels must be even"
         
         self.actnorm = ActNorm(channels)
         self.inv_conv = Invertible1x1Conv(channels)
-        self.affine_coupling = AffineCouplingLayer(channels, hidden_channels)
+        self.affine_coupling = AffineCouplingLayer(channels, hidden_channels, dropout_rate)
         
     def forward(self, x):
         # ActNorm
@@ -271,7 +273,7 @@ class StarINNWithLearnableILWT(nn.Module):
     """
     StarINN model with Learnable ILWT preprocessing.
     """
-    def __init__(self, channels=6, num_blocks=2, hidden_channels=32):
+    def __init__(self, channels=6, num_blocks=2, hidden_channels=32, dropout_rate=0.1):
         super(StarINNWithLearnableILWT, self).__init__()
         
         # Learnable ILWT preprocessing module
@@ -283,7 +285,7 @@ class StarINNWithLearnableILWT(nn.Module):
         # Create the invertible blocks for processing in frequency domain
         self.blocks = nn.ModuleList()
         for i in range(num_blocks):
-            self.blocks.append(StarINNBlock(self.inn_channels, hidden_channels))
+            self.blocks.append(StarINNBlock(self.inn_channels, hidden_channels, dropout_rate))
     
     def forward(self, x):
         """

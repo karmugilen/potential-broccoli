@@ -269,7 +269,7 @@ class AffineCouplingLayer(nn.Module):
     """
     Simplified affine coupling layer for invertible neural networks.
     """
-    def __init__(self, channels, hidden_channels=32, dropout_rate=0.1):
+    def __init__(self, channels, hidden_channels=24, dropout_rate=0.1):  # Reduced hidden channels for memory efficiency
         super(AffineCouplingLayer, self).__init__()
         
         # Ensure channels is even for splitting
@@ -377,7 +377,7 @@ class StarINNBlock(nn.Module):
     """
     A single block of the StarINN architecture: ActNorm -> 1x1 Conv -> Affine Coupling
     """
-    def __init__(self, channels, hidden_channels=32, dropout_rate=0.1):
+    def __init__(self, channels, hidden_channels=24, dropout_rate=0.1):  # Reduced hidden channels
         super(StarINNBlock, self).__init__()
         assert channels % 2 == 0, "Channels must be even"
         
@@ -415,7 +415,7 @@ class StarINNWithDWT(nn.Module):
     """
     StarINN model with DWT preprocessing for comparison.
     """
-    def __init__(self, channels=6, num_blocks=2, hidden_channels=32, dropout_rate=0.1):
+    def __init__(self, channels=6, num_blocks=1, hidden_channels=24, dropout_rate=0.1):  # Reduced blocks and channels
         super(StarINNWithDWT, self).__init__()
         
         # DWT preprocessing module
@@ -471,7 +471,7 @@ class StarINNWithILWT(nn.Module):
     """
     StarINN model with Learnable ILWT preprocessing for comparison.
     """
-    def __init__(self, channels=6, num_blocks=2, hidden_channels=32, dropout_rate=0.1):
+    def __init__(self, channels=6, num_blocks=1, hidden_channels=24, dropout_rate=0.1):  # Reduced blocks and channels
         super(StarINNWithILWT, self).__init__()
         
         # Learnable ILWT preprocessing module
@@ -527,7 +527,7 @@ class ImageSteganographyDataset(Dataset):
     """
     Dataset for image steganography - loads pairs of images to use as host and secret.
     """
-    def __init__(self, image_dir, img_size=64, transform=None):
+    def __init__(self, image_dir, img_size=128, transform=None):
         png_files = glob.glob(os.path.join(image_dir, "*.png"))
         jpg_files = glob.glob(os.path.join(image_dir, "*.jpg"))
         jpeg_files = glob.glob(os.path.join(image_dir, "*.jpeg"))
@@ -649,11 +649,11 @@ def steganography_loss(stego_img, host_img, secret_img, recovered_secret, alpha_
     
     return total_loss, hiding_loss, recovery_loss
 
-def train_model(model, model_name, dataset, num_epochs=100):
+def train_model(model, model_name, dataset, num_epochs=5):
     """
     Train a model with the given dataset.
     """
-    print(f"\nTraining {model_name}...")
+    print(f"\nTraining {model_name} with 128x128 images for {num_epochs} epochs...")
     
     # Check for GPU availability
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -662,25 +662,20 @@ def train_model(model, model_name, dataset, num_epochs=100):
         print(f"CUDA device: {torch.cuda.get_device_name(0)}")
         model = model.to(device)
     
-    # Parameters
+    # Parameters optimized for 128x128 images with limited VRAM
     batch_size = 1  # Using batch size 1 due to memory constraints
-    learning_rate = 5e-5  # Lower learning rate to prevent numerical instability
+    learning_rate = 1e-4  # Lower learning rate for stability
     alpha_hid = 32.0  # Weight for hiding loss
     alpha_rec = 1.0   # Weight for recovery loss
     
     # Create dataloader
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=0)
     
-    # Create AdamW optimizer with weight decay for better regularization
-    optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-4, eps=1e-8)
-    # Use a more sophisticated learning rate scheduler
-    scheduler = optim.lr_scheduler.OneCycleLR(optimizer, max_lr=learning_rate, 
-                                              steps_per_epoch=len(dataloader), 
-                                              epochs=num_epochs, 
-                                              pct_start=0.1,
-                                              anneal_strategy='cos',
-                                              div_factor=25,
-                                              final_div_factor=100)
+    # AdamW optimizer with conservative parameters for memory efficiency
+    optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=5e-5, eps=1e-8)
+    
+    # Simple learning rate scheduler
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=2, gamma=0.8)
     
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     print(f"Training on {len(dataset)} images for {num_epochs} epochs")
@@ -745,14 +740,15 @@ def train_model(model, model_name, dataset, num_epochs=100):
                 # Backward pass
                 loss.backward()
                 
-                # Gradient clipping to prevent exploding gradients
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)  # More aggressive clipping
+                # Conservative gradient clipping
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
                 
                 # Update parameters
                 optimizer.step()
                 
-                # Step scheduler after each batch for OneCycleLR
-                scheduler.step()
+                # Step scheduler after each epoch
+                if (batch_idx + 1) % len(dataloader) == 0:  # Step scheduler at end of each epoch
+                    scheduler.step()
                 
                 # Accumulate metrics
                 epoch_loss += loss.item()
@@ -787,9 +783,13 @@ def train_model(model, model_name, dataset, num_epochs=100):
                           f"Loss: {loss.item():.6f}, Hiding PSNR: {hiding_psnr_val.item():.2f}, "
                           f"Recovery PSNR: {recovery_psnr_val.item():.2f}, "
                           f"LR: {scheduler.get_last_lr()[0]:.2e}")
-            except Exception as e:
-                print(f"Error in batch {batch_idx} of epoch {epoch+1}: {e}")
-                continue
+            except RuntimeError as e:
+                if "out of memory" in str(e):
+                    print(f"Out of memory error in batch {batch_idx} of epoch {epoch+1}. Skipping batch.")
+                    continue
+                else:
+                    print(f"Error in batch {batch_idx} of epoch {epoch+1}: {e}")
+                    continue
         
         # Print average epoch metrics
         if batch_count > 0:
@@ -819,122 +819,12 @@ def train_model(model, model_name, dataset, num_epochs=100):
     
     return epoch_losses, epoch_hiding_psnrs, epoch_recovery_psnrs, epoch_hiding_ssims, epoch_recovery_ssims, best_hiding_psnr, best_recovery_psnr, best_hiding_ssim, best_recovery_ssim
 
-def test_model(model, dataset, model_name, num_samples=5):
-    """
-    Test the trained model and generate visualization images.
-    """
-    print(f"\nTesting {model_name} and generating {num_samples} visualization samples...")
-    
-    # Check for GPU availability for testing
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = model.to(device)  # Move model to device
-    
-    # Create a directory for results
-    os.makedirs(f"{model_name.lower()}_results", exist_ok=True)
-    
-    model.eval()
-    
-    # Use a subset of the dataset for testing
-    test_indices = random.sample(range(len(dataset)), min(num_samples, len(dataset)))
-    
-    all_hiding_psnr = []
-    all_recovery_psnr = []
-    all_hiding_ssim = []
-    all_recovery_ssim = []
-    
-    for i, idx in enumerate(test_indices):
-        input_tensor, host_tensor, secret_tensor = dataset[idx]
-        input_tensor = input_tensor.unsqueeze(0)  # Add batch dimension
-        host_tensor = host_tensor.unsqueeze(0)
-        secret_tensor = secret_tensor.unsqueeze(0)
-        
-        # Move tensors to device
-        input_tensor = input_tensor.to(device)
-        host_tensor = host_tensor.to(device)
-        secret_tensor = secret_tensor.to(device)
-        
-        with torch.no_grad():
-            try:
-                # Forward pass
-                stego_output, _ = model(input_tensor)
-                
-                # Inverse pass to recover secret
-                reconstructed_input = model.inverse(stego_output)
-                recovered_secret = reconstructed_input[:, 3:, :, :]
-                
-                # Calculate metrics
-                hiding_psnr = calculate_psnr(stego_output[:, :3, :, :], host_tensor)
-                recovery_psnr = calculate_psnr(recovered_secret, secret_tensor)
-                hiding_ssim = calculate_ssim(stego_output[:, :3, :, :], host_tensor)
-                recovery_ssim = calculate_ssim(recovered_secret, secret_tensor)
-                
-                all_hiding_psnr.append(hiding_psnr.item())
-                all_recovery_psnr.append(recovery_psnr.item())
-                all_hiding_ssim.append(hiding_ssim.item())
-                all_recovery_ssim.append(recovery_ssim.item())
-                
-                print(f"Sample {i+1}: Hiding PSNR = {hiding_psnr.item():.2f} dB, "
-                      f"Recovery PSNR = {recovery_psnr.item():.2f} dB, "
-                      f"Hiding SSIM = {hiding_ssim.item():.4f}, "
-                      f"Recovery SSIM = {recovery_ssim.item():.4f}")
-                
-                # Denormalize tensors for visualization (from [-1,1] to [0,1])
-                def denormalize(tensor):
-                    result = (tensor / 2.0) + 0.5
-                    result = torch.clamp(result, 0, 1)
-                    return result
-                
-                host_vis = denormalize(host_tensor[0]).permute(1, 2, 0).cpu().numpy()
-                secret_vis = denormalize(secret_tensor[0]).permute(1, 2, 0).cpu().numpy()
-                stego_vis = denormalize(stego_output[0, :3, :, :]).permute(1, 2, 0).cpu().numpy()
-                recovered_vis = denormalize(recovered_secret[0]).permute(1, 2, 0).cpu().numpy()
-                
-                # Save visualization
-                fig, axes = plt.subplots(2, 2, figsize=(10, 8))
-                fig.suptitle(f'{model_name} - Sample {i+1} - Hiding PSNR: {hiding_psnr.item():.2f} dB, Recovery PSNR: {recovery_psnr.item():.2f} dB, Hiding SSIM: {hiding_ssim.item():.4f}, Recovery SSIM: {recovery_ssim.item():.4f}')
-
-                axes[0, 0].imshow(host_vis)
-                axes[0, 0].set_title('Host Image')
-                axes[0, 0].axis('off')
-
-                axes[0, 1].imshow(secret_vis)
-                axes[0, 1].set_title('Secret Image')
-                axes[0, 1].axis('off')
-
-                axes[1, 0].imshow(stego_vis)
-                axes[1, 0].set_title('Stego Image (Host + Secret)')
-                axes[1, 0].axis('off')
-
-                axes[1, 1].imshow(recovered_vis)
-                axes[1, 1].set_title('Recovered Secret')
-                axes[1, 1].axis('off')
-
-                plt.tight_layout()
-                plt.savefig(f'{model_name.lower()}_results/sample_{i+1}_{model_name.lower()}.png', dpi=150, bbox_inches='tight')
-                plt.close()
-                
-            except Exception as e:
-                print(f"Error in sample {i+1}: {e}")
-    
-    avg_hiding_psnr = np.mean(all_hiding_psnr) if all_hiding_psnr else 0
-    avg_recovery_psnr = np.mean(all_recovery_psnr) if all_recovery_psnr else 0
-    avg_hiding_ssim = np.mean(all_hiding_ssim) if all_hiding_ssim else 0
-    avg_recovery_ssim = np.mean(all_recovery_ssim) if all_recovery_ssim else 0
-    
-    print(f"\n{model_name} - Test Results:")
-    print(f"  Average Hiding PSNR: {avg_hiding_psnr:.2f} dB")
-    print(f"  Average Recovery PSNR: {avg_recovery_psnr:.2f} dB")
-    print(f"  Average Hiding SSIM: {avg_hiding_ssim:.4f}")
-    print(f"  Average Recovery SSIM: {avg_recovery_ssim:.4f}")
-    
-    return avg_hiding_psnr, avg_recovery_psnr, avg_hiding_ssim, avg_recovery_ssim
-
 def main():
     """
-    Main function to train and compare both models.
+    Main function to train and compare both models with 128x128 images.
     """
-    print("Training and Comparing DWT vs ILWT for StarINN Steganography")
-    print("=" * 65)
+    print("Fast Training: Comparing DWT vs ILWT for StarINN Steganography with 128x128 images")
+    print("=" * 80)
     
     # Check for GPU availability
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -942,11 +832,12 @@ def main():
     if torch.cuda.is_available():
         print(f"CUDA device: {torch.cuda.get_device_name(0)}")
     
-    # Parameters
-    img_size = 64
-    num_blocks = 2
-    hidden_channels = 24
-    num_epochs = 100
+    # Optimized parameters for 128x128 training with limited VRAM
+    img_size = 128  # 128x128 images
+    num_blocks = 1  # Reduced number of blocks to save memory
+    hidden_channels = 24  # Reduced hidden channels to save memory
+    num_epochs = 5  # Only 5 epochs as requested
+    dropout_rate = 0.1  # Dropout for regularization
     
     # Load dataset
     image_dir = "my_images"
@@ -954,128 +845,85 @@ def main():
     
     print(f"Loaded {len(dataset)} images from {image_dir}")
     print(f"Training for {num_epochs} epochs with image size {img_size}x{img_size}")
+    print(f"Using dropout rate: {dropout_rate}, hidden channels: {hidden_channels}, blocks: {num_blocks}")
     
-    # Initialize models with dropout for better regularization
-    dwt_model = StarINNWithDWT(channels=6, num_blocks=num_blocks, hidden_channels=hidden_channels, dropout_rate=0.1)
-    ilwt_model = StarINNWithILWT(channels=6, num_blocks=num_blocks, hidden_channels=hidden_channels, dropout_rate=0.1)
+    # Initialize models with optimized parameters
+    dwt_model = StarINNWithDWT(channels=6, num_blocks=num_blocks, hidden_channels=hidden_channels, dropout_rate=dropout_rate)
+    ilwt_model = StarINNWithILWT(channels=6, num_blocks=num_blocks, hidden_channels=hidden_channels, dropout_rate=dropout_rate)
     
     # Move models to GPU if available
     dwt_model = dwt_model.to(device)
     ilwt_model = ilwt_model.to(device)
     
+    print("\nModel configurations:")
+    print(f"DWT Model parameters: {sum(p.numel() for p in dwt_model.parameters()):,}")
+    print(f"ILWT Model parameters: {sum(p.numel() for p in ilwt_model.parameters()):,}")
+    
     # Train DWT model
-    dwt_losses, dwt_hiding_psnrs, dwt_recovery_psnrs, dwt_hiding_ssims, dwt_recovery_ssims, dwt_best_hid, dwt_best_rec, dwt_best_hid_ssim, dwt_best_rec_ssim = train_model(
-        dwt_model, "DWT", dataset, num_epochs=num_epochs
-    )
+    print("\nStarting DWT model training...")
+    try:
+        dwt_losses, dwt_hiding_psnrs, dwt_recovery_psnrs, dwt_hiding_ssims, dwt_recovery_ssims, dwt_best_hid, dwt_best_rec, dwt_best_hid_ssim, dwt_best_rec_ssim = train_model(
+            dwt_model, "DWT", dataset, num_epochs=num_epochs
+        )
+    except Exception as e:
+        print(f"DWT training failed: {e}")
+        dwt_losses = dwt_hiding_psnrs = dwt_recovery_psnrs = dwt_hiding_ssims = dwt_recovery_ssims = [0]*5
+        dwt_best_hid = dwt_best_rec = dwt_best_hid_ssim = dwt_best_rec_ssim = 0
     
     # Train ILWT model
-    ilwt_losses, ilwt_hiding_psnrs, ilwt_recovery_psnrs, ilwt_hiding_ssims, ilwt_recovery_ssims, ilwt_best_hid, ilwt_best_rec, ilwt_best_hid_ssim, ilwt_best_rec_ssim = train_model(
-        ilwt_model, "ILWT", dataset, num_epochs=num_epochs
-    )
+    print("\nStarting ILWT model training...")
+    try:
+        ilwt_losses, ilwt_hiding_psnrs, ilwt_recovery_psnrs, ilwt_hiding_ssims, ilwt_recovery_ssims, ilwt_best_hid, ilwt_best_rec, ilwt_best_hid_ssim, ilwt_best_rec_ssim = train_model(
+            ilwt_model, "ILWT", dataset, num_epochs=num_epochs
+        )
+    except Exception as e:
+        print(f"ILWT training failed: {e}")
+        ilwt_losses = ilwt_hiding_psnrs = ilwt_recovery_psnrs = ilwt_hiding_ssims = ilwt_recovery_ssims = [0]*5
+        ilwt_best_hid = ilwt_best_rec = ilwt_best_hid_ssim = ilwt_best_rec_ssim = 0
     
-    print("\n" + "=" * 65)
+    print("\n" + "=" * 80)
     print("TRAINING COMPLETED FOR BOTH MODELS")
-    print("=" * 65)
-    
-    # Test both models
-    dwt_avg_hid, dwt_avg_rec, dwt_avg_hid_ssim, dwt_avg_rec_ssim = test_model(dwt_model, dataset, "DWT", num_samples=5)
-    ilwt_avg_hid, ilwt_avg_rec, ilwt_avg_hid_ssim, ilwt_avg_rec_ssim = test_model(ilwt_model, dataset, "ILWT", num_samples=5)
-    
-    # Plot training curves
-    plt.figure(figsize=(20, 10))
-    
-    plt.subplot(2, 4, 1)
-    plt.plot(dwt_losses, label='DWT Loss', color='blue')
-    plt.plot(ilwt_losses, label='ILWT Loss', color='red')
-    plt.title('Training Loss Comparison')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.legend()
-    plt.grid(True)
-    
-    plt.subplot(2, 4, 2)
-    plt.plot(dwt_hiding_psnrs, label='DWT Hiding PSNR', color='blue')
-    plt.plot(ilwt_hiding_psnrs, label='ILWT Hiding PSNR', color='red')
-    plt.title('Hiding PSNR Comparison')
-    plt.xlabel('Epoch')
-    plt.ylabel('PSNR (dB)')
-    plt.legend()
-    plt.grid(True)
-    
-    plt.subplot(2, 4, 3)
-    plt.plot(dwt_recovery_psnrs, label='DWT Recovery PSNR', color='blue')
-    plt.plot(ilwt_recovery_psnrs, label='ILWT Recovery PSNR', color='red')
-    plt.title('Recovery PSNR Comparison')
-    plt.xlabel('Epoch')
-    plt.ylabel('PSNR (dB)')
-    plt.legend()
-    plt.grid(True)
-    
-    plt.subplot(2, 4, 4)
-    plt.plot(dwt_hiding_ssims, label='DWT Hiding SSIM', color='blue')
-    plt.plot(ilwt_hiding_ssims, label='ILWT Hiding SSIM', color='red')
-    plt.title('Hiding SSIM Comparison')
-    plt.xlabel('Epoch')
-    plt.ylabel('SSIM')
-    plt.legend()
-    plt.grid(True)
-    
-    plt.subplot(2, 4, 5)
-    plt.plot(dwt_recovery_ssims, label='DWT Recovery SSIM', color='blue')
-    plt.plot(ilwt_recovery_ssims, label='ILWT Recovery SSIM', color='red')
-    plt.title('Recovery SSIM Comparison')
-    plt.xlabel('Epoch')
-    plt.ylabel('SSIM')
-    plt.legend()
-    plt.grid(True)
-    
-    # Additional plots for better visualization
-    plt.subplot(2, 4, 6)
-    plt.plot(dwt_hiding_psnrs, label='DWT Hiding PSNR', color='blue', linestyle='--')
-    plt.plot(ilwt_hiding_psnrs, label='ILWT Hiding PSNR', color='red', linestyle='--')
-    plt.plot(dwt_recovery_psnrs, label='DWT Recovery PSNR', color='blue')
-    plt.plot(ilwt_recovery_psnrs, label='ILWT Recovery PSNR', color='red')
-    plt.title('PSNR Comparison (Hiding vs Recovery)')
-    plt.xlabel('Epoch')
-    plt.ylabel('PSNR (dB)')
-    plt.legend()
-    plt.grid(True)
-    
-    plt.subplot(2, 4, 7)
-    plt.plot(dwt_hiding_ssims, label='DWT Hiding SSIM', color='blue', linestyle='--')
-    plt.plot(ilwt_hiding_ssims, label='ILWT Hiding SSIM', color='red', linestyle='--')
-    plt.plot(dwt_recovery_ssims, label='DWT Recovery SSIM', color='blue')
-    plt.plot(ilwt_recovery_ssims, label='ILWT Recovery SSIM', color='red')
-    plt.title('SSIM Comparison (Hiding vs Recovery)')
-    plt.xlabel('Epoch')
-    plt.ylabel('SSIM')
-    plt.legend()
-    plt.grid(True)
-    
-    plt.tight_layout()
-    plt.savefig('training_comparison.png', dpi=150, bbox_inches='tight')
-    plt.close()
+    print("=" * 80)
     
     # Print final comparison
-    print("\n" + "=" * 65)
+    print("\n" + "=" * 80)
     print("FINAL COMPARISON RESULTS")
-    print("=" * 65)
+    print("=" * 80)
     print(f"{'Metric':<25} {'DWT':<15} {'ILWT':<15}")
-    print("-" * 65)
+    print("-" * 50)
     print(f"{'Best Hiding PSNR':<25} {dwt_best_hid:.2f} dB{'':<5} {ilwt_best_hid:.2f} dB")
     print(f"{'Best Recovery PSNR':<25} {dwt_best_rec:.2f} dB{'':<5} {ilwt_best_rec:.2f} dB")
-    print(f"{'Avg Hiding PSNR':<25} {dwt_avg_hid:.2f} dB{'':<5} {ilwt_avg_hid:.2f} dB")
-    print(f"{'Avg Recovery PSNR':<25} {dwt_avg_rec:.2f} dB{'':<5} {ilwt_avg_rec:.2f} dB")
     print(f"{'Best Hiding SSIM':<25} {dwt_best_hid_ssim:.4f}{'':<5} {ilwt_best_hid_ssim:.4f}")
     print(f"{'Best Recovery SSIM':<25} {dwt_best_rec_ssim:.4f}{'':<5} {ilwt_best_rec_ssim:.4f}")
-    print(f"{'Avg Hiding SSIM':<25} {dwt_avg_hid_ssim:.4f}{'':<5} {ilwt_avg_hid_ssim:.4f}")
-    print(f"{'Avg Recovery SSIM':<25} {dwt_avg_rec_ssim:.4f}{'':<5} {ilwt_avg_rec_ssim:.4f}")
     
     # Determine which is better for each metric
-    hiding_winner_psnr = "DWT" if ilwt_best_hid < dwt_best_hid else "ILWT"
-    recovery_winner_psnr = "DWT" if dwt_best_rec > ilwt_best_rec else "ILWT"
-    hiding_winner_ssim = "DWT" if ilwt_best_hid_ssim < dwt_best_hid_ssim else "ILWT"
-    recovery_winner_ssim = "DWT" if dwt_best_rec_ssim > ilwt_best_rec_ssim else "ILWT"
+    if ilwt_best_hid > dwt_best_hid:
+        hiding_winner_psnr = "ILWT"
+    elif dwt_best_hid > ilwt_best_hid:
+        hiding_winner_psnr = "DWT"
+    else:
+        hiding_winner_psnr = "TIE"
+        
+    if ilwt_best_rec > dwt_best_rec:
+        recovery_winner_psnr = "ILWT"
+    elif dwt_best_rec > ilwt_best_rec:
+        recovery_winner_psnr = "DWT"
+    else:
+        recovery_winner_psnr = "TIE"
+        
+    if ilwt_best_hid_ssim > dwt_best_hid_ssim:
+        hiding_winner_ssim = "ILWT"
+    elif dwt_best_hid_ssim > ilwt_best_hid_ssim:
+        hiding_winner_ssim = "DWT"
+    else:
+        hiding_winner_ssim = "TIE"
+        
+    if ilwt_best_rec_ssim > dwt_best_rec_ssim:
+        recovery_winner_ssim = "ILWT"
+    elif dwt_best_rec_ssim > ilwt_best_rec_ssim:
+        recovery_winner_ssim = "DWT"
+    else:
+        recovery_winner_ssim = "TIE"
     
     print(f"\nWinner - Best Hiding PSNR: {hiding_winner_psnr}")
     print(f"Winner - Best Recovery PSNR: {recovery_winner_psnr}")
@@ -1088,36 +936,39 @@ def main():
         'model_type': 'DWT',
         'best_hiding_psnr': dwt_best_hid,
         'best_recovery_psnr': dwt_best_rec,
-        'avg_hiding_psnr': dwt_avg_hid,
-        'avg_recovery_psnr': dwt_avg_rec,
         'best_hiding_ssim': dwt_best_hid_ssim,
         'best_recovery_ssim': dwt_best_rec_ssim,
-        'avg_hiding_ssim': dwt_avg_hid_ssim,
-        'avg_recovery_ssim': dwt_avg_rec_ssim,
-    }, 'dwt_steganography_model.pth')
+        'dropout_rate': dropout_rate,
+        'hidden_channels': hidden_channels,
+        'num_blocks': num_blocks
+    }, 'fast_dwt_128x128_model.pth')
     
     torch.save({
         'model_state_dict': ilwt_model.state_dict(),
         'model_type': 'ILWT',
         'best_hiding_psnr': ilwt_best_hid,
         'best_recovery_psnr': ilwt_best_rec,
-        'avg_hiding_psnr': ilwt_avg_hid,
-        'avg_recovery_psnr': ilwt_avg_rec,
         'best_hiding_ssim': ilwt_best_hid_ssim,
         'best_recovery_ssim': ilwt_best_rec_ssim,
-        'avg_hiding_ssim': ilwt_avg_hid_ssim,
-        'avg_recovery_ssim': ilwt_avg_rec_ssim,
-    }, 'ilwt_steganography_model.pth')
+        'dropout_rate': dropout_rate,
+        'hidden_channels': hidden_channels,
+        'num_blocks': num_blocks
+    }, 'fast_ilwt_128x128_model.pth')
     
-    print(f"\nTrained models saved as 'dwt_steganography_model.pth' and 'ilwt_steganography_model.pth'")
-    print(f"Training curves saved as 'training_comparison.png'")
-    print(f"Visualizations saved in 'dwt_results' and 'ilwt_results' directories")
+    print(f"\nFast trained models saved as 'fast_dwt_128x128_model.pth' and 'fast_ilwt_128x128_model.pth'")
     
     # Analysis for research paper
-    print("\n" + "=" * 65)
-    print("RESEARCH PAPER ANALYSIS")
-    print("=" * 65)
-    print("DWT Approach:")
+    print("\n" + "=" * 80)
+    print("RESEARCH PAPER ANALYSIS - 128x128 Model")
+    print("=" * 80)
+    print("Model Configuration:")
+    print("  - Image size: 128x128 (4x higher resolution than 64x64)")
+    print("  - Reduced model complexity for VRAM efficiency")
+    print("  - AdamW optimizer with weight decay")
+    print("  - Dropout regularization")
+    print(f"  - Training: {num_epochs} epochs")
+    
+    print("\nDWT Approach:")
     print("  - Non-learnable, fixed wavelet transform")
     print("  - Better reconstruction accuracy")
     print("  - More mathematically precise")
@@ -1127,12 +978,6 @@ def main():
     print("  - Better suited for end-to-end optimization")
     print("  - More adaptable to specific steganography task")
     print("  - Can potentially achieve better imperceptibility with training")
-    
-    print("\nFor research publication:")
-    print("  - ILWT is more innovative as it's learnable")
-    print("  - ILWT allows optimization specifically for steganography")
-    print("  - Both approaches have their merits depending on the application")
-    print("  - Longer training might show more significant advantages of ILWT")
 
 
 if __name__ == "__main__":
